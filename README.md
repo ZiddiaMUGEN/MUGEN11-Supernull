@@ -9,6 +9,9 @@ The technique used is a more complicated version of the ROP chain developed in h
 
 The simplest way is to grab a copy of `supernull_kfm.cns` and `asm/supernull.asm`. Use `supernull.asm` as a base and write your code. Then, place the assembled code directly above the Statedef line in `supernull_kfm.cns`, replacing the existing payload. You should **never** touch anything below the Statedef declaration, as that is the ROP chain + bootstrap fragment.
 
+Your code needs to avoid null bytes 0x00 as these are processed poorly by the line reader.
+You must also make sure to leave a newline (0x0D 0x0A) between your code and the Statedef line, or else the parser will complain.
+
 ## Some Useful Offsets
 
 As a part of the ROP chain, the following addresses are populated with useful data:
