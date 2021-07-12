@@ -17,8 +17,12 @@ The flag field is 64 bytes long. This means it's not very easy to use, and defin
 However, since it's supernull (runs at parse time), we can just corrupt the entire statedef loading or even file loading portion of the stack and drop out. This gives more space.
 
 Even after VProt'ing the stack, running code under these conditions feels bad. Although stack code execution is already supernull, the next step should be removing protection in another region of memory (or just running SetProcessDEPPolicy if possible) and jumping out.
+I opted for running VirtualProtect against the location of the CNS file in memory to then jump to the file and start executing restriction-free.
+VirtualProtect was easier than SetProcessDEPPolicy as I had a pointer to the handle for VirtualProtect prepared already.
 
 Please review the following documentation for details:
 `ROP Chain Documentation.txt` - The chain of ROP gadgets used to eventually gain stack code execution.
 `Flag Bytes to Enable Stack Execution.txt` - Assembled bytes that allow for stack code execution, including the leading 0x40 bytes of padding.
+`asm/bootstrap.asm` - Short Assembly code to execute VirtualProtect against the CNS file location in memory and jump to it.
+`asm/supernull.asm` - Assembly code fragment which fixes the stack/EIP/etc. after ROP and bootstrap.
 `supernull_kfm.cns` - An example supernull implementation, which discards the results of the entire file parsing.
