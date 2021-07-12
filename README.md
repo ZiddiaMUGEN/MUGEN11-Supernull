@@ -1,21 +1,27 @@
-##Overview
+## Overview
 The AssertSpecial Flag parameter has a stack smash exploit. We can perform a ROP technique in order to achieve arbitrary code execution from the stack.
 The flag parameter has a buffer of 0x40 bytes, followed immediately by return address. Since this is not a formatted string, the 0x40 bytes have to be filled manually.
 The flag parameter is read using a standard library function that does not perform buffer range checking, thus allowing the overflow.
 
 The technique used is a more complicated version of the ROP chain developed in https://www.fuzzysecurity.com/tutorials/expDev/7.html - this article is a great first look at what ROP is and how it works.
 
-##How do I use this?
+## How do I use this?
 
 The simplest way is to grab a copy of `supernull_kfm.cns` and `asm/supernull.asm`. Use `supernull.asm` as a base and write your code. Then, place the assembled code directly above the Statedef line in `supernull_kfm.cns`, replacing the existing payload. You should **never** touch anything below the Statedef declaration, as that is the ROP chain + bootstrap fragment.
 
-##Some Useful Offsets
+## Some Useful Offsets
 
 As a part of the ROP chain, the following addresses are populated with useful data:
 
-0x
+0x67BD0324 - Pointer to the VirtualProtect function
+0x67BD0210 - "VirtualProtect" as a string (likely not to be too useful)
 
-##Technicals
+These addresses can also be helpful:
+
+0x10008044 - Pointer to the KERNEL32 module handle
+0x004DE030 - Pointer to the GetProcAddress function
+
+## Technicals
 
 The ROP chain is quite complex due to some limitations involved:
 - cannot use gadgets from mugen.exe or pthreadVC2.dll due to 0x00 bytes in the addresses
@@ -35,7 +41,7 @@ I opted for running VirtualProtect against the location of the CNS file in memor
 
 By executing from the top of the file which triggered the supernull exploit, I can just position arbitrary code at the beginning of the file as a payload.
 
-##Documents
+## Documents
 
 Please review the following documentation for details:
 `ROP Chain Documentation.txt` - The chain of ROP gadgets used to eventually gain stack code execution.
