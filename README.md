@@ -9,7 +9,10 @@ The technique used is a more complicated version of the ROP chain developed in h
 
 The simplest way is to grab a copy of `supernull_kfm.cns` and `asm/supernull.asm`. Use `supernull.asm` as a base and write your code. Then, place the assembled code directly above the Statedef line in `supernull_kfm.cns`, replacing the existing payload. You should **never** touch anything below the Statedef declaration, as that is the ROP chain + bootstrap fragment.
 
-Your code needs to avoid null bytes 0x00 as these are processed poorly by the line reader.
+The file parser breaks the file into lines based on the presence of a NULL byte (0x00) in your code. Raw NULL bytes in your code will not be loaded properly.
+However, if you replace these with newlines (0x0D 0x0A), the file parser will create a NULL byte in its place for you.
+So you can freely use 0x00 bytes in your code, provided you do some post-processing to turn them into newlines.
+
 You must also make sure to leave a newline (0x0D 0x0A) between your code and the Statedef line, or else the parser will complain.
 
 ## Some Useful Offsets
