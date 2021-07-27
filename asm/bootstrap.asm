@@ -15,9 +15,7 @@ mov dword [eax],ecx	;; set up the return address in target ESP
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Bootstrap: VirtualProtect and JMP to file contents                   ;;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; 0x503D20 = pointer to current file struct
-;; [0x503D20]+0x04 = pointer to file data (on heap)
-;; [[0x503D20]+0x04] = file contents
+;; Ref to current file sits at esp - 0x3D8
 ;; file contents are completely loaded here, no limitations on characters.
 ;; 100% free to run code.
 
